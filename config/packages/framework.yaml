@@ -8,6 +8,14 @@ framework:
     #esi: true
     #fragments: true
 
+    http_client:
+        default_options:
+            timeout: 10
+            max_redirects: 0
+            headers:
+                Accept: 'application/json'
+                User-Agent: 'Initrode-Weather-Proxy/1.0'
+
 when@test:
     framework:
         test: true

@@ -1,0 +1,7 @@
+framework:
+    rate_limiter:
+        weather_api:
+            policy: 'token_bucket'
+            limit: 60
+            rate: { interval: '1 minute' }
+            lock_factory: 'lock.factory'
