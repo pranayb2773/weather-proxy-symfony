@@ -1,0 +1,4 @@
+framework:
+    rate_limiter:
+        weather_api:
+            policy: 'no_limit'

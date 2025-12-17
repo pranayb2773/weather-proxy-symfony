@@ -3,6 +3,7 @@
 namespace App\Tests\Unit\Service;
 
 use App\Service\WeatherService;
+use PHPUnit\Framework\Attributes\AllowMockObjectsWithoutExpectations;
 use PHPUnit\Framework\TestCase;
 use Psr\Log\LoggerInterface;
 use Symfony\Contracts\Cache\CacheInterface;
@@ -11,6 +12,7 @@ use Symfony\Contracts\HttpClient\HttpClientInterface;
 use Symfony\Contracts\HttpClient\ResponseInterface;
 use Symfony\Contracts\HttpClient\Exception\TransportExceptionInterface;
 
+#[AllowMockObjectsWithoutExpectations]
 class WeatherServiceTest extends TestCase
 {
     private HttpClientInterface $httpClient;
@@ -40,14 +42,15 @@ class WeatherServiceTest extends TestCase
             'hourly' => ['temperature_2m' => [14.0, 15.0, 15.5]],
         ];
 
-        // Mock cache to return data immediately (simulating cache hit)
         $this->cache->expects($this->once())
             ->method('get')
             ->willReturn($cachedData);
 
-        // HTTP client should NOT be called on cache hit
         $this->httpClient->expects($this->never())
             ->method('request');
+
+        $this->logger->expects($this->any())
+            ->method('debug');
 
         $result = $this->weatherService->getWeatherData();
 
@@ -104,23 +107,22 @@ class WeatherServiceTest extends TestCase
     public function testApiErrorThrowsException(): void
     {
         $mockCacheItem = $this->createMock(ItemInterface::class);
+        $mockCacheItem->expects($this->any())
+            ->method('expiresAfter');
 
         $transportException = new class ('Network error') extends \Exception implements TransportExceptionInterface {
         };
 
-        // Mock cache miss
         $this->cache->expects($this->once())
             ->method('get')
             ->willReturnCallback(function ($key, $callback) use ($mockCacheItem) {
                 return $callback($mockCacheItem);
             });
 
-        // HTTP client throws transport exception
         $this->httpClient->expects($this->once())
             ->method('request')
             ->willThrowException($transportException);
 
-        // Logger should log the error
         $this->logger->expects($this->once())
             ->method('error')
             ->with(
@@ -140,8 +142,9 @@ class WeatherServiceTest extends TestCase
             ->willThrowException(new \JsonException('Invalid JSON'));
 
         $mockCacheItem = $this->createMock(ItemInterface::class);
+        $mockCacheItem->expects($this->any())
+            ->method('expiresAfter');
 
-        // Mock cache miss
         $this->cache->expects($this->once())
             ->method('get')
             ->willReturnCallback(function ($key, $callback) use ($mockCacheItem) {
@@ -152,7 +155,6 @@ class WeatherServiceTest extends TestCase
             ->method('request')
             ->willReturn($mockResponse);
 
-        // Logger should log the error
         $this->logger->expects($this->once())
             ->method('error');
 
@@ -165,12 +167,14 @@ class WeatherServiceTest extends TestCase
         $apiData = ['latitude' => 52.52, 'longitude' => 13.41];
 
         $mockResponse = $this->createMock(ResponseInterface::class);
-        $mockResponse->method('getStatusCode')->willReturn(200);
-        $mockResponse->method('toArray')->willReturn($apiData);
+        $mockResponse->expects($this->any())
+            ->method('getStatusCode')
+            ->willReturn(200);
+        $mockResponse->expects($this->any())
+            ->method('toArray')
+            ->willReturn($apiData);
 
         $mockCacheItem = $this->createMock(ItemInterface::class);
-
-        // Verify expiresAfter is called with exactly 300 seconds
         $mockCacheItem->expects($this->once())
             ->method('expiresAfter')
             ->with($this->identicalTo(300));
@@ -184,6 +188,11 @@ class WeatherServiceTest extends TestCase
         $this->httpClient->expects($this->once())
             ->method('request')
             ->willReturn($mockResponse);
+
+        $this->logger->expects($this->any())
+            ->method('debug');
+        $this->logger->expects($this->any())
+            ->method('info');
 
         $this->weatherService->getWeatherData();
     }
