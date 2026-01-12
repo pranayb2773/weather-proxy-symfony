@@ -5,12 +5,10 @@ namespace App\Controller;
 use App\Service\WeatherService;
 use Psr\Log\LoggerInterface;
 use Symfony\Bundle\FrameworkBundle\Controller\AbstractController;
-use Symfony\Component\DependencyInjection\Attribute\Autowire;
 use Symfony\Component\HttpFoundation\JsonResponse;
 use Symfony\Component\HttpFoundation\Request;
 use Symfony\Component\HttpFoundation\Response;
 use Symfony\Component\HttpKernel\Exception\TooManyRequestsHttpException;
-use Symfony\Component\RateLimiter\RateLimiterFactory;
 use Symfony\Component\Routing\Attribute\Route;
 use Symfony\Contracts\HttpClient\Exception\HttpExceptionInterface;
 use Symfony\Contracts\HttpClient\Exception\TransportExceptionInterface;
@@ -23,36 +21,30 @@ class WeatherProxyController extends AbstractController
 {
     public function __construct(
         private readonly WeatherService $weatherService,
-        private readonly LoggerInterface $logger,
-        #[Autowire(service: 'limiter.weather_api')]
-        private readonly RateLimiterFactory $weatherApiLimiter
+        private readonly LoggerInterface $logger
     ) {
     }
 
     #[Route('/api/weather', name: 'api_weather', methods: ['GET'])]
     public function getWeather(Request $request): JsonResponse
     {
-        $limiter = $this->weatherApiLimiter->create($request->getClientIp());
-
-        if (false === $limiter->consume(1)->isAccepted()) {
-            $this->logger->warning('Rate limit exceeded for IP address', [
-                'ip' => $request->getClientIp(),
-            ]);
-
-            throw new TooManyRequestsHttpException(
-                null,
-                'Rate limit exceeded. Please try again later.'
-            );
-        }
-
         try {
-            $weatherData = $this->weatherService->getWeatherData();
+            $weatherData = $this->weatherService->getWeatherData($request->getClientIp());
 
             $this->logger->debug('Weather data served successfully', [
                 'ip' => $request->getClientIp(),
             ]);
 
             return $this->json($weatherData);
+        } catch (TooManyRequestsHttpException $e) {
+            return $this->json(
+                [
+                    'error' => 'Too many requests',
+                    'message' => $e->getMessage(),
+                    'retry_after' => $e->getHeaders()['Retry-After'] ?? null,
+                ],
+                Response::HTTP_TOO_MANY_REQUESTS
+            );
         } catch (TransportExceptionInterface $e) {
             $this->logger->error('Timeout or network error when calling Open-Meteo API', [
                 'error' => $e->getMessage(),

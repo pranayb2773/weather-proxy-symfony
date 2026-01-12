@@ -3,6 +3,9 @@
 namespace App\Service;
 
 use Psr\Log\LoggerInterface;
+use Symfony\Component\DependencyInjection\Attribute\Autowire;
+use Symfony\Component\HttpKernel\Exception\TooManyRequestsHttpException;
+use Symfony\Component\RateLimiter\RateLimiterFactory;
 use Symfony\Contracts\Cache\CacheInterface;
 use Symfony\Contracts\Cache\ItemInterface;
 use Symfony\Contracts\HttpClient\HttpClientInterface;
@@ -10,6 +13,7 @@ use Symfony\Contracts\HttpClient\HttpClientInterface;
 /**
  * Fetches weather data from Open-Meteo API with 5-minute caching to reduce API calls.
  * Uses static cache key since coordinates (Berlin: 52.52, 13.41) are fixed.
+ * Applies IP-based rate limiting (60 req/min).
  */
 class WeatherService
 {
@@ -20,12 +24,22 @@ class WeatherService
     public function __construct(
         private readonly HttpClientInterface $httpClient,
         private readonly CacheInterface $cache,
-        private readonly LoggerInterface $logger
+        private readonly LoggerInterface $logger,
+        #[Autowire(service: 'limiter.weather_api')]
+        private readonly RateLimiterFactory $weatherApiLimiter
     ) {
     }
 
-    public function getWeatherData(): array
+    /**
+     * Get weather data with rate limiting applied
+     *
+     * @param string $clientIp The client's IP address for rate limiting
+     * @throws TooManyRequestsHttpException When rate limit is exceeded
+     */
+    public function getWeatherData(string $clientIp): array
     {
+        $this->checkRateLimit($clientIp);
+
         return $this->cache->get(self::CACHE_KEY, function (ItemInterface $item) {
             $this->logger->debug('Weather cache miss, fetching from Open-Meteo API');
 
@@ -51,5 +65,37 @@ class WeatherService
                 throw $e;
             }
         });
+    }
+
+    /**
+     * Check rate limit for the given IP address
+     *
+     * @throws TooManyRequestsHttpException When rate limit is exceeded
+     */
+    private function checkRateLimit(string $clientIp): void
+    {
+        $limiter = $this->weatherApiLimiter->create($clientIp);
+
+        // Consume 1 token and check if it was accepted
+        $limit = $limiter->consume(1);
+
+        if (!$limit->isAccepted()) {
+            $retryAfter = $limit->getRetryAfter();
+
+            $this->logger->warning('Rate limit exceeded for IP address', [
+                'ip' => $clientIp,
+                'retry_after' => $retryAfter->format('Y-m-d H:i:s'),
+            ]);
+
+            throw new TooManyRequestsHttpException(
+                $retryAfter->getTimestamp() - time(),
+                'Rate limit exceeded. Please try again later.'
+            );
+        }
+
+        $this->logger->debug('Rate limit check passed', [
+            'ip' => $clientIp,
+            'remaining_tokens' => $limit->getRemainingTokens(),
+        ]);
     }
 }
